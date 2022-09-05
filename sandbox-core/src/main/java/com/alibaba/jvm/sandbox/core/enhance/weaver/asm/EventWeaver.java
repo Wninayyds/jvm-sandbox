@@ -68,6 +68,7 @@ public class EventWeaver extends ClassVisitor implements Opcodes, AsmTypes, AsmM
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
     private final int targetClassLoaderObjectID;
+    private boolean hasOnMethodEnter;
     private final String namespace;
     private final int listenerId;
     private final String targetJavaClassName;
@@ -134,6 +135,12 @@ public class EventWeaver extends ClassVisitor implements Opcodes, AsmTypes, AsmM
 
     @Override
     public MethodVisitor visitMethod(final int access, final String name, final String desc, final String signature, final String[] exceptions) {
+
+        if(name.equals("onMethodEnterBySandbox")){
+            hasOnMethodEnter = true;
+            final MethodVisitor mv = super.visitMethod(access, name, desc, signature, exceptions);
+            return mv;
+        }
 
         final String signCode = getBehaviorSignCode(name, desc);
         if (!isMatchedBehavior(signCode)) {
@@ -272,6 +279,8 @@ public class EventWeaver extends ClassVisitor implements Opcodes, AsmTypes, AsmM
                     codeLockForTracing.lock(new CodeLock.Block() {
                         @Override
                         public void code() {
+                            String owner = toInternalClassName(targetJavaClassName);
+                            mv.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "onMethodEnterBySandbox", "()V", false);
                             mark(beginLabel);
                             loadArgArray();
                             dup();
@@ -337,8 +346,8 @@ public class EventWeaver extends ClassVisitor implements Opcodes, AsmTypes, AsmM
 
                 @Override
                 protected void onMethodExit(final int opcode) {
-                    //TODO 这里是否应该先判断 codeLockForTracing.isLock()
-                    if (!isThrow(opcode)) {
+                    //TODO 这里是否应该判断 codeLockForTracing.isLock()
+                    if (!isThrow(opcode) && !codeLockForTracing.isLock()) {
                         codeLockForTracing.lock(new CodeLock.Block() {
                             @Override
                             public void code() {
@@ -537,6 +546,18 @@ public class EventWeaver extends ClassVisitor implements Opcodes, AsmTypes, AsmM
                 MethodVisitor mv = cv.visitMethod(newAccess, method.getName(), method.getDescriptor(), null, null);
                 mv.visitEnd();
             }
+        }
+
+        if(!hasOnMethodEnter){
+            MethodVisitor methodVisitor = cv.visitMethod(ACC_PRIVATE | ACC_STATIC, "onMethodEnterBySandbox", "()V", null, null);
+            methodVisitor.visitCode();
+            methodVisitor.visitFieldInsn(GETSTATIC, "java/lang/System", "out", "Ljava/io/PrintStream;");
+            methodVisitor.visitLdcInsn("test");
+            methodVisitor.visitMethodInsn(INVOKEVIRTUAL, "java/io/PrintStream", "println", "(Ljava/lang/String;)V",
+                false);
+            methodVisitor.visitInsn(RETURN);
+            methodVisitor.visitMaxs(2, 0);
+            methodVisitor.visitEnd();
         }
         super.visitEnd();
     }
